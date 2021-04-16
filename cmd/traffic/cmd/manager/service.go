@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"net"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,6 +21,7 @@ import (
 	"github.com/telepresenceio/telepresence/rpc/v2/systema"
 	"github.com/telepresenceio/telepresence/v2/cmd/traffic/cmd/manager/internal/state"
 	"github.com/telepresenceio/telepresence/v2/pkg/connpool"
+	"github.com/telepresenceio/telepresence/v2/pkg/iputil"
 	"github.com/telepresenceio/telepresence/v2/pkg/version"
 )
 
@@ -38,6 +40,8 @@ type Manager struct {
 
 	rpc.UnsafeManagerServer
 }
+
+var _ rpc.ManagerServer = &Manager{}
 
 type wall struct{}
 
@@ -477,6 +481,112 @@ func (m *Manager) ConnTunnel(server rpc.Manager_ConnTunnelServer) error {
 	ctx = WithSessionInfo(ctx, sessionInfo)
 	sessionID := sessionInfo.GetSessionId()
 	return m.state.ConnTunnel(ctx, sessionID, server)
+}
+
+func (m *Manager) LookupHost(ctx context.Context, request *rpc.LookupHostRequest) (*rpc.LookupHostResponse, error) {
+	ctx = WithSessionInfo(ctx, request.GetSession())
+	dlog.Debugf(ctx, "LookupHost called %s", request.Host)
+	sessionID := request.GetSession().GetSessionId()
+	result := &rpc.LookupHostResponse{}
+	client := m.state.GetClient(sessionID)
+	if client == nil {
+		return nil, status.Errorf(codes.NotFound, "Client session %q not found", sessionID)
+	}
+
+	iceptAgentIDs := m.state.GetAgentsInterceptedByClient(client.Name)
+	iceptCount := len(iceptAgentIDs)
+
+	ips := iputil.IPs{}
+	if iceptCount > 0 {
+		rsMu := sync.Mutex{} // prevent concurrent updates of result.Ips slice
+		wg := sync.WaitGroup{}
+		wg.Add(iceptCount)
+		agentTimeout, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		responseCount := 0
+		defer cancel()
+		for _, agentSessionID := range m.state.GetAgentsInterceptedByClient(client.Name) {
+			go func(agentSessionID string) {
+				defer func() {
+					m.state.EndHostLookup(agentSessionID, request)
+					wg.Done()
+				}()
+
+				rsCh := m.state.StartHostLookup(agentSessionID, request)
+				if rsCh == nil {
+					return
+				}
+				select {
+				case <-agentTimeout.Done():
+					return
+				case rs := <-rsCh:
+					if rs == nil {
+						// Channel closed
+						return
+					}
+					rsMu.Lock()
+					responseCount++
+					rc := responseCount
+					for _, ip := range rs.Ips {
+						ips = append(ips, ip)
+					}
+					rsMu.Unlock()
+					if rc == iceptCount {
+						// all agents have responded
+						return
+					}
+				}
+			}(agentSessionID)
+		}
+		wg.Wait() // wait for timeout or that all agents have responded
+
+		if len(ips) > 0 {
+			ips = ips.UniqueSorted()
+			dlog.Debugf(ctx, "LookupHost response from agents %s -> %s", request.Host, ips)
+			result.Ips = ips.BytesSlice()
+			return result, nil
+		}
+	}
+
+	// Either we aren't intercepting any agents, or none of them was able to find the given host. Let's
+	// try from the manager too.
+	addrs, err := net.LookupHost(request.Host)
+	response := &rpc.LookupHostResponse{}
+	if err != nil {
+		response.Ips = [][]byte{}
+		dlog.Debugf(ctx, "LookupHost response %s -> NOT FOUND", request.Host)
+		return response, nil
+	}
+	ips = make(iputil.IPs, len(addrs))
+	for i, addr := range addrs {
+		ips[i] = iputil.Parse(addr)
+	}
+	dlog.Debugf(ctx, "LookupHost response from agents %s -> %s", request.Host, ips)
+	response.Ips = ips.BytesSlice()
+	return response, nil
+}
+
+func (m *Manager) AgentLookupHostResponse(ctx context.Context, response *rpc.LookupHostAgentResponse) (*empty.Empty, error) {
+	ctx = WithSessionInfo(ctx, response.GetSession())
+	dlog.Debugf(ctx, "AgentLookupHostResponse called %s -> %s", response.Request.Host, iputil.IPsFromBytesSlice(response.Response.Ips))
+	m.state.PostLookupResponse(response)
+	return &empty.Empty{}, nil
+}
+
+func (m *Manager) WatchLookupHost(session *rpc.SessionInfo, stream rpc.Manager_WatchLookupHostServer) error {
+	ctx := WithSessionInfo(stream.Context(), session)
+	dlog.Debugf(ctx, "WatchLookupHost called")
+	lrCh := m.state.WatchLookupHost(session.SessionId)
+	for {
+		select {
+		case <-m.ctx.Done():
+			return nil
+		case lr := <-lrCh:
+			if err := stream.Send(lr); err != nil {
+				dlog.Error(ctx, err)
+				return nil
+			}
+		}
+	}
 }
 
 // expire removes stale sessions.
