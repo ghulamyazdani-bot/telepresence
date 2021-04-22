@@ -4,6 +4,7 @@ package telepresence.daemon;
 import "google/protobuf/empty.proto";
 import "rpc/common/version.proto";
 import "rpc/daemon/iptables.proto";
+import "rpc/manager/manager.proto";
 
 option go_package = "github.com/telepresenceio/telepresence/rpc/v2/daemon";
 
@@ -52,5 +53,6 @@ message TableName {
 }
 
 message ManagerInfo {
-  int32 grpc_port = 1;
+  manager.SessionInfo session = 1;
+  int32 grpc_port = 2;
 }
