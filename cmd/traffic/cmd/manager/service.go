@@ -443,6 +443,10 @@ func (m *Manager) ReviewIntercept(ctx context.Context, rIReq *rpc.ReviewIntercep
 			intercept.PodName = rIReq.PodName
 			intercept.SshPort = rIReq.SshPort
 			intercept.MechanismArgsDesc = rIReq.MechanismArgsDesc
+
+			if intercept.Disposition == rpc.InterceptDispositionType_ACTIVE {
+				m.state.StartInterceptListener(ctx, intercept)
+			}
 		}
 	})
 

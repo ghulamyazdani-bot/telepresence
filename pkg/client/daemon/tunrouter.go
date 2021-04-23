@@ -413,7 +413,7 @@ func (t *tunRouter) tcp(c context.Context, pkt tcp.Packet) {
 	ipHdr := pkt.IPHeader()
 	tcpHdr := pkt.Header()
 	connID := connpool.NewConnID(unix.IPPROTO_TCP, ipHdr.Source(), ipHdr.Destination(), tcpHdr.SourcePort(), tcpHdr.DestinationPort())
-	wf, err := t.handlers.Get(c, connID, func(c context.Context, remove func()) (connpool.Handler, error) {
+	wf, _, err := t.handlers.Get(c, connID, func(c context.Context, remove func()) (connpool.Handler, error) {
 		return tcp.NewHandler(t.connStream, &t.closing, t.toTunCh, connID, remove), nil
 	})
 	if err != nil {
@@ -427,7 +427,7 @@ func (t *tunRouter) udp(c context.Context, dg udp.Datagram) {
 	ipHdr := dg.IPHeader()
 	udpHdr := dg.Header()
 	connID := connpool.NewConnID(unix.IPPROTO_UDP, ipHdr.Source(), ipHdr.Destination(), udpHdr.SourcePort(), udpHdr.DestinationPort())
-	uh, err := t.handlers.Get(c, connID, func(c context.Context, remove func()) (connpool.Handler, error) {
+	uh, _, err := t.handlers.Get(c, connID, func(c context.Context, remove func()) (connpool.Handler, error) {
 		if udpHdr.DestinationPort() == t.dnsPort && ipHdr.Destination().Equal(t.dnsIP) {
 			return udp.NewDnsInterceptor(t.connStream, t.toTunCh, connID, remove, t.dnsLocalAddr)
 		}

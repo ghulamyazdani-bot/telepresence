@@ -22,6 +22,7 @@ type state int32
 const (
 	// simplified server-side tcp states
 	stateSynReceived = state(iota)
+	stateSynSent
 	stateEstablished
 	stateFinWait1
 	stateFinWait2
@@ -33,6 +34,8 @@ func (s state) String() (txt string) {
 	switch s {
 	case stateIdle:
 		txt = "IDLE"
+	case stateSynSent:
+		txt = "SYN SENT"
 	case stateSynReceived:
 		txt = "SYN RECEIVED"
 	case stateEstablished:
@@ -238,11 +241,15 @@ func (h *handler) sendFin(ctx context.Context, expectAck bool) {
 	h.sendToTun(ctx, pkt)
 }
 
-func (h *handler) sendSyn(ctx context.Context, syn Packet) {
+func (h *handler) sendSynReply(ctx context.Context, syn Packet) {
 	synHdr := syn.Header()
 	if !synHdr.SYN() {
 		return
 	}
+	h.sendSyn(ctx, synHdr.Sequence()+1, true)
+}
+
+func (h *handler) sendSyn(ctx context.Context, ackNumber uint32, ack bool) {
 	hl := HeaderLen
 	hl += 4 // for the Maximum Segment Size option
 
@@ -253,9 +260,9 @@ func (h *handler) sendSyn(ctx context.Context, syn Packet) {
 	pkt := h.newResponse(hl, true)
 	tcpHdr := pkt.Header()
 	tcpHdr.SetSYN(true)
-	tcpHdr.SetACK(true)
+	tcpHdr.SetACK(ack)
 	tcpHdr.SetSequence(h.sequence())
-	tcpHdr.SetAckNumber(synHdr.Sequence() + 1)
+	tcpHdr.SetAckNumber(ackNumber)
 
 	// adjust data offset to account for options
 	tcpHdr.SetDataOffset(hl / 4)
@@ -358,11 +365,9 @@ func (h *handler) idle(ctx context.Context, syn Packet) quitReason {
 		return quitByUs
 	}
 
-	h.synPacket = syn
 	synOpts, err := options(tcpHdr)
 	if err != nil {
 		dlog.Error(ctx, err)
-		h.synPacket = nil
 		h.sendToTun(ctx, syn.Reset())
 		return quitByUs
 	}
@@ -385,11 +390,14 @@ func (h *handler) idle(ctx context.Context, syn Packet) quitReason {
 		}
 	}
 
-	if err := h.sendConnControl(ctx, connpool.Connect); err != nil {
-		dlog.Error(ctx, err)
-		h.synPacket = nil
-		h.sendToTun(ctx, syn.Reset())
-		return quitByUs
+	if h.state() == stateIdle {
+		h.synPacket = syn
+		if err := h.sendConnControl(ctx, connpool.Connect); err != nil {
+			dlog.Error(ctx, err)
+			h.synPacket = nil
+			h.sendToTun(ctx, syn.Reset())
+			return quitByUs
+		}
 	}
 	h.setSequence(1)
 	h.setState(ctx, stateSynReceived)
