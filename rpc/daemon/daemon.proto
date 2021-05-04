@@ -57,7 +57,7 @@ message OutboundInfo {
   // manager_port is the port for the traffic-manager gRPC API.
   int32 manager_port = 2;
 
-  // kube_dns_ip is the IP address of the kube-dns.kube-system service,
+  // kube_dns_ip is the IP address of the kube-dns.kube-system, dns-default.openshift-dns, or similar service,
   bytes kube_dns_ip = 3;
 
   // service_subnet is the Kubernetes service subnet
