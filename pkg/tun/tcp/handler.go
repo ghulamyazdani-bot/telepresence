@@ -467,6 +467,7 @@ func (h *handler) handleReceived(ctx context.Context, pkt Packet) quitReason {
 
 	sq := tcpHdr.Sequence()
 	lastAck := h.sequenceLastAcked()
+	payloadLen := len(tcpHdr.Payload())
 	switch {
 	case sq == lastAck:
 		if state == stateFinWait1 && ackNbr == h.finalSeq && !tcpHdr.FIN() {
@@ -480,8 +481,14 @@ func (h *handler) handleReceived(ctx context.Context, pkt Packet) quitReason {
 		h.addOutOfOrderPackage(ctx, pkt)
 		release = false
 		return pleaseContinue
+	case sq == lastAck-1 && payloadLen == 0:
+		// keep alive
+		h.sendAck(ctx)
+		_ = h.sendConnControl(ctx, connpool.KeepAlive)
+		return pleaseContinue
 	default:
 		// resend of already acknowledged package. Just ignore
+		dlog.Debug(ctx, "client resends already acked package")
 		return pleaseContinue
 	}
 	if tcpHdr.RST() {
@@ -489,8 +496,8 @@ func (h *handler) handleReceived(ctx context.Context, pkt Packet) quitReason {
 	}
 
 	switch {
-	case len(tcpHdr.Payload()) > 0:
-		h.setSequenceLastAcked(lastAck + uint32(len(tcpHdr.Payload())))
+	case payloadLen > 0:
+		h.setSequenceLastAcked(lastAck + uint32(payloadLen))
 		if !h.sendToMgr(ctx, pkt) {
 			return quitByContext
 		}

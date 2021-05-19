@@ -18,6 +18,7 @@ const (
 	DisconnectOK
 	ReadClosed
 	WriteClosed
+	KeepAlive
 )
 
 func (c ControlCode) String() string {
@@ -38,6 +39,8 @@ func (c ControlCode) String() string {
 		return "READ_CLOSED"
 	case WriteClosed:
 		return "WRITE_CLOSED"
+	case KeepAlive:
+		return "KEEP_ALIVE"
 	default:
 		return fmt.Sprintf("** unknown control code: %d **", c)
 	}
