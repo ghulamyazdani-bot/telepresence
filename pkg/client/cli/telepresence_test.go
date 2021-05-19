@@ -428,8 +428,7 @@ func (cs *connectedSuite) TestI_LocalOnlyIntercept() {
 		cs.Empty(stderr)
 		ctx := dlog.NewTestContext(cs.T(), false)
 		cs.Eventually(func() bool {
-			_, err := net.DefaultResolver.LookupHost(ctx, "hello-0")
-			return err != nil
+			return run(ctx, "curl", "hello-0") != nil
 		}, 3*time.Second, time.Second)
 	})
 }
